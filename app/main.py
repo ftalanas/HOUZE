@@ -8,10 +8,12 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from pathlib import Path
+from starlette.responses import Response
+from typing import Generator, Dict
 
 from .db import engine, Base, SessionLocal
 from .models import User, Household, Task, Completion, PointsLedger
-from .schemas import TaskCreate, TaskOut
 from .security import hash_password, verify_password, encode_session, SESSION_SECURE
 
 # --- DB init ---
@@ -34,16 +36,19 @@ with SessionLocal() as db:
         db.commit()
 
 # --- App init ---
+BASE_DIR = Path(__file__).resolve().parent
+
 app = FastAPI(title="Household Tasks")
-templates = Jinja2Templates(directory="app/templates")
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
 
 limiter = Limiter(key_func=get_remote_address)
 
 # Dependency
 
 
-def get_db():
+def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
         yield db
@@ -60,7 +65,7 @@ def redirect(url: str) -> RedirectResponse:
 
 # --- Auth routes (minimal, form-based) ---
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
+async def login_page(request: Request) -> Response:
     return templates.TemplateResponse("login.html", {"request": request, "error": None})
 
 
@@ -71,13 +76,13 @@ async def login(
     email: str = Form(...),
     password: str = Form(...),
     db: Session = Depends(get_db),
-):
+) -> Response:
     user = db.scalar(select(User).where(User.email == email))
     if not user or not verify_password(password, user.hash_pw):
         return templates.TemplateResponse(
             "login.html", {"request": request, "error": "Credenziali non valide"}
         )
-    resp = redirect("/")
+
     token = encode_session(
         {
             "user_id": user.id,
@@ -86,19 +91,22 @@ async def login(
             "role": user.role,
         }
     )
+
+    resp = RedirectResponse(url="/", status_code=303)  # <-- 303 per i POST redirect
     resp.set_cookie(
-        "session",
-        token,
+        key="session",
+        value=token,
         httponly=True,
-        secure=SESSION_SECURE,
+        secure=SESSION_SECURE,  # False in locale
         samesite="lax",
         max_age=60 * 60 * 24 * 7,
+        path="/",  # <-- importante per validità su tutte le route
     )
     return resp
 
 
 @app.get("/logout")
-async def logout():
+async def logout() -> Response:
     resp = redirect("/login")
     resp.delete_cookie("session")
     return resp
@@ -106,7 +114,7 @@ async def logout():
 
 # --- UI: dashboard ---
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, db: Session = Depends(get_db)):
+async def dashboard(request: Request, db: Session = Depends(get_db)) -> Response:
     token = request.cookies.get("session")
     if not token:
         return redirect("/login")
@@ -143,34 +151,56 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
 
 
 # --- API: tasks CRUD (minimal) ---
-@app.post("/tasks", response_model=TaskOut)
+@app.post("/tasks", response_class=HTMLResponse)
 async def create_task(
-    payload: TaskCreate, request: Request, db: Session = Depends(get_db)
-):
+    request: Request,
+    title: str = Form(...),
+    points: int = Form(1),
+    priority: str = Form("medium"),
+    due_date: str | None = Form(None),
+    description: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> Response:
     from .security import decode_session
 
     data = decode_session(request.cookies.get("session", ""))
     if not data:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    due_date_obj = date.fromisoformat(due_date) if due_date else None
+
     task = Task(
         household_id=data["household_id"],
-        title=payload.title.strip(),
-        description=(payload.description or "").strip(),
-        points=payload.points,
-        priority=payload.priority,
-        due_date=payload.due_date,
+        title=title.strip(),
+        description=(description or "").strip(),
+        points=points,
+        priority=priority,
+        due_date=due_date_obj,
         created_by=data["user_id"],
         is_active=True,
     )
     db.add(task)
     db.commit()
     db.refresh(task)
-    return task
+
+    # per segnare correttamente lo stato "non completato"
+    completed_ids: set[int] = set()
+
+    # ritorniamo un <li> pronto da inserire nella UL con hx-swap="afterbegin"
+    return templates.TemplateResponse(
+        "_task_item.html",
+        {
+            "request": request,
+            "t": task,
+            "completed_ids": completed_ids,
+        },
+    )
 
 
 @app.post("/tasks/{task_id}/complete")
-async def complete_task(task_id: int, request: Request, db: Session = Depends(get_db)):
+async def complete_task(
+    task_id: int, request: Request, db: Session = Depends(get_db)
+) -> Dict[str, str]:
     from .security import decode_session
 
     data = decode_session(request.cookies.get("session", ""))

@@ -19,3 +19,13 @@ dependencies = [
 
 [tool.setuptools]
 packages = ["app"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+strict_optional = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["passlib.*"]
+ignore_missing_imports = true

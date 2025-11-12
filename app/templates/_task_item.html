@@ -1,0 +1,16 @@
+<li id="task-{{ t.id }}" class="{{ 'done' if t.id in completed_ids else '' }}">
+    <strong>[{{ t.priority|upper }}]</strong> {{ t.title }}
+    {% if t.due_date %}<small>(scadenza: {{ t.due_date }})</small>{% endif %}
+    {% if t.id not in completed_ids %}
+    <button hx-post="/tasks/{{ t.id }}/complete" hx-swap="none"
+        hx-on::after-request="document.getElementById('task-{{ t.id }}').classList.add('done')">
+        Complete
+    </button>
+    {% else %}
+    <small>completato</small>
+    {% endif %}
+    <details>
+        <summary>Dettagli</summary>
+        <p>{{ t.description }}</p>
+    </details>
+</li>
