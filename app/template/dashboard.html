@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% block content %}
+<header style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
+    <h2>Dashboard - {{ user.email }}</h2>
+    <nav>
+        <a href="/logout">Logout</a>
+    </nav>
+</header>
+
+<section>
+    <details open>
+        <summary><strong>Nuovo task</strong></summary>
+        <form id="new-task-form" hx-post="/tasks" hx-trigger="submit" hx-target="#tasks" hx-swap="afterbegin"
+            onsubmit="this.reset();return false;">
+            <div class="grid">
+                <label>Titolo<input name="title" required></label>
+                <label>Punti<input type="number" name="points" value="1" min="0"></label>
+                <label>Priorità
+                    <select name="priority">
+                        <option value="low">low</option>
+                        <option value="medium" selected>medium</option>
+                        <option value="high">high</option>
+                    </select>
+                </label>
+                <label>Scadenza<input type="date" name="due_date"></label>
+            </div>
+            <label>Descrizione<textarea name="description"></textarea></label>
+            <button type="submit">Crea</button>
+        </form>
+    </details>
+</section>
+
+<section>
+    <h3>Task</h3>
+    <ul id="tasks">
+        {% for t in tasks %}
+        <li id="task-{{t.id}}" class="{{ 'done' if t.id in completed_ids else '' }}">
+            <strong>[{{ t.priority|upper }}]</strong> {{ t.title }}
+            {% if t.due_date %}<small>(scadenza: {{ t.due_date }})</small>{% endif %}
+            {% if t.id not in completed_ids %}
+            <button hx-post="/tasks/{{t.id}}/complete" hx-swap="none"
+                hx-on::after-request="document.getElementById('task-{{t.id}}').classList.add('done')">Complete</button>
+            {% else %}
+            <small>completato</small>
+            {% endif %}
+            <details>
+                <summary>Dettagli</summary>
+                <p>{{ t.description }}</p>
+            </details>
+        </li>
+        {% endfor %}
+    </ul>
+</section>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block content %}
+<article>
+    <hgroup>
+        <h2>Accesso</h2>
+        <p>MVP - Household Tasks</p>
+    </hgroup>
+    {% if error %}<p style="color:#b00">{{ error }}</p>{% endif %}
+    <form method="post" action="/login">
+        <label>Email<input type="email" name="email" value="admin@example.com" required></label>
+        <label>Password<input type="password" name="password" value="admin" required></label>
+        <button type="submit">Entra</button>
+    </form>
+</article>
+{% endblock %}
