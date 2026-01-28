@@ -1,4 +1,6 @@
-# Household Tasks – MVP
+# HOUZE – MVP
+
+# Software per gestione delle faccende domestiche. Backend Python connesso ad un Frontend HTML. Generatore di compiti da assegnare agli utenti registrati, con stati e point rewards con classifica.
 
 **Stack**: FastAPI + SQLAlchemy (SQLite), Jinja2 + HTMX, session cookie, Argon2 hashing.
 
