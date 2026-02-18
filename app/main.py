@@ -1,6 +1,10 @@
 from __future__ import annotations
+
 from datetime import date
-from fastapi import FastAPI, Depends, HTTPException, Request, Form
+from pathlib import Path
+from typing import Dict, Generator
+
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -8,32 +12,11 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from pathlib import Path
 from starlette.responses import Response
-from typing import Generator, Dict
 
-from .db import engine, Base, SessionLocal
-from .models import User, Household, Task, Completion, PointsLedger
-from .security import hash_password, verify_password, encode_session, SESSION_SECURE
-
-# --- DB init ---
-Base.metadata.create_all(bind=engine)
-
-# Bootstrap default admin/household
-with SessionLocal() as db:
-    if not db.scalar(select(Household).limit(1)):
-        h = Household(name="Home")
-        db.add(h)
-        db.flush()
-        admin = User(
-            household_id=h.id,
-            name="Admin",
-            email="admin@example.com",
-            hash_pw=hash_password("admin"),
-            role="admin",
-        )
-        db.add(admin)
-        db.commit()
+from .db import Base, SessionLocal, engine
+from .models import Completion, Household, PointsLedger, Task, User
+from .security import SESSION_SECURE, encode_session, hash_password, verify_password
 
 # --- App init ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -42,12 +25,37 @@ app = FastAPI(title="Household Tasks")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-
 limiter = Limiter(key_func=get_remote_address)
 
-# Dependency
+
+# --- DB init & bootstrap (moved to startup) ---
+@app.on_event("startup")
+def startup() -> None:
+    """
+    Initialize schema and bootstrap a default household/admin on first run.
+    Running this on startup (instead of import-time) is safer for Docker/reload.
+    """
+    Base.metadata.create_all(bind=engine)
+
+    with SessionLocal() as db:
+        has_household = db.scalar(select(Household.id).limit(1))
+        if not has_household:
+            h = Household(name="Home")
+            db.add(h)
+            db.flush()
+
+            admin = User(
+                household_id=h.id,
+                name="Admin",
+                email="admin@example.com",
+                hash_pw=hash_password("admin"),
+                role="admin",
+            )
+            db.add(admin)
+            db.commit()
 
 
+# --- Dependency ---
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
@@ -57,8 +65,6 @@ def get_db() -> Generator[Session, None, None]:
 
 
 # --- Helpers ---
-
-
 def redirect(url: str) -> RedirectResponse:
     return RedirectResponse(url, status_code=303)
 
@@ -92,15 +98,15 @@ async def login(
         }
     )
 
-    resp = RedirectResponse(url="/", status_code=303)  # <-- 303 per i POST redirect
+    resp = RedirectResponse(url="/", status_code=303)
     resp.set_cookie(
         key="session",
         value=token,
         httponly=True,
-        secure=SESSION_SECURE,  # False in locale
+        secure=SESSION_SECURE,  # False in locale (set via env/config in security.py)
         samesite="lax",
         max_age=60 * 60 * 24 * 7,
-        path="/",  # <-- importante per validità su tutte le route
+        path="/",
     )
     return resp
 
@@ -118,7 +124,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)) -> Response
     token = request.cookies.get("session")
     if not token:
         return redirect("/login")
-    # naive decode (no error handling here; redirected by login otherwise)
+
     from .security import decode_session
 
     data = decode_session(token)
@@ -128,10 +134,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)) -> Response
     today = date.today()
     tasks = db.scalars(
         select(Task)
-        .where(
-            Task.household_id == data["household_id"],
-            Task.is_active,
-        )
+        .where(Task.household_id == data["household_id"], Task.is_active)
         .order_by(Task.due_date.is_(None), Task.due_date)
     ).all()
 
@@ -183,17 +186,10 @@ async def create_task(
     db.commit()
     db.refresh(task)
 
-    # per segnare correttamente lo stato "non completato"
     completed_ids: set[int] = set()
-
-    # ritorniamo un <li> pronto da inserire nella UL con hx-swap="afterbegin"
     return templates.TemplateResponse(
         "_task_item.html",
-        {
-            "request": request,
-            "t": task,
-            "completed_ids": completed_ids,
-        },
+        {"request": request, "t": task, "completed_ids": completed_ids},
     )
 
 
@@ -206,10 +202,11 @@ async def complete_task(
     data = decode_session(request.cookies.get("session", ""))
     if not data:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
     task = db.get(Task, task_id)
     if not task or task.household_id != data["household_id"]:
         raise HTTPException(status_code=404, detail="Task non trovato")
-    # idempotency light: if already completed, no double points
+
     already = db.scalar(
         select(Completion).where(
             Completion.task_id == task.id, Completion.user_id == data["user_id"]
@@ -217,8 +214,8 @@ async def complete_task(
     )
     if already:
         return {"status": "already_done"}
-    c = Completion(task_id=task.id, user_id=data["user_id"])
-    db.add(c)
+
+    db.add(Completion(task_id=task.id, user_id=data["user_id"]))
     db.add(
         PointsLedger(
             user_id=data["user_id"], delta=task.points, reason=f"Complete: {task.title}"

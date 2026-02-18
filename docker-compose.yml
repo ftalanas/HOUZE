@@ -1,0 +1,13 @@
+services:
+  houze:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:////app/data/household.db
+      - SESSION_SECURE=0
+    volumes:
+      - houze_data:/app/data
+
+volumes:
+  houze_data:
